@@ -19,6 +19,7 @@
 #include "../core/pool_func.hpp"
 #include "../map_func.h"
 #include "../rev.h"
+#include "../tile_map.h"
 #include "../game/game.hpp"
 
 #include "../safeguards.h"
@@ -39,6 +40,21 @@ INSTANTIATE_POOL_METHODS(NetworkAdminSocket)
 /** The timeout for authorisation of the client. */
 static const int ADMIN_AUTHORISATION_TIMEOUT = 10000;
 
+/**
+ * The amount of tiles per dimension being sent per packet.
+ * We break this up in small square chunks to stay within the SEND_MTU limitation of packet sizes, while maintaining
+ * the most amount of information we transmit per packet.
+ * At the same time, this should be a (small) multiple of two, to ensure that a chunk does not overflow outside the map.
+ */
+static const uint ADMIN_MAP_CHUNK_DIMENSION = 32;
+/**
+ * The total amount of tiles being sent per packet.
+ * This value must be smaller than SEND_MTU - 6 to ensure it fits within the confines of a single packet.
+ * This value should not be changed directly. Change ADMIN_MAP_CHUNK_DIMENSION instead.
+ */
+static const uint ADMIN_MAP_CHUNK_TILES = ADMIN_MAP_CHUNK_DIMENSION * ADMIN_MAP_CHUNK_DIMENSION;
+static_assert(ADMIN_MAP_CHUNK_TILES < SEND_MTU - 6);
+
 
 /** Frequencies, which may be registered for a certain update type. */
 static const AdminUpdateFrequency _admin_update_type_frequencies[] = {
@@ -52,6 +68,7 @@ static const AdminUpdateFrequency _admin_update_type_frequencies[] = {
 	ADMIN_FREQUENCY_POLL,                                                                                                                                  ///< ADMIN_UPDATE_CMD_NAMES
 	                       ADMIN_FREQUENCY_AUTOMATIC,                                                                                                      ///< ADMIN_UPDATE_CMD_LOGGING
 	                       ADMIN_FREQUENCY_AUTOMATIC,                                                                                                      ///< ADMIN_UPDATE_GAMESCRIPT
+	ADMIN_FREQUENCY_POLL | ADMIN_FREQUENCY_AUTOMATIC,                                                                                                      ///< ADMIN_UPDATE_MAP
 };
 /** Sanity check. */
 static_assert(lengthof(_admin_update_type_frequencies) == ADMIN_UPDATE_END);
@@ -655,6 +672,90 @@ NetworkRecvStatus ServerNetworkAdminSocketHandler::SendCmdLogging(ClientID clien
 	return NETWORK_RECV_STATUS_OKAY;
 }
 
+/**
+ * Send a single chunk of map information.
+ * 
+ * @param chunk_id The chunk index for this map.
+ */
+NetworkRecvStatus ServerNetworkAdminSocketHandler::SendMapInfoChunk(uint chunk_id)
+{
+	assert(chunk_id < (MapSize() / ADMIN_MAP_CHUNK_TILES));
+
+	/* Translate our chunk_id to the starting x/y coordinates. */
+	uint start_x = (chunk_id * ADMIN_MAP_CHUNK_DIMENSION) % MapSizeX();
+	uint start_y = ((chunk_id * ADMIN_MAP_CHUNK_DIMENSION) / MapSizeX()) * ADMIN_MAP_CHUNK_DIMENSION;
+
+	Packet* p = new Packet(ADMIN_PACKET_SERVER_MAP_INFO_CHUNK);
+	/* Send our chunk ID first. */
+	p->Send_uint32(chunk_id);
+	/* We send the chunk size so we can change this value without breaking protocol. */
+	p->Send_uint32(ADMIN_MAP_CHUNK_DIMENSION);
+
+	for (uint y = start_y; y < start_y + ADMIN_MAP_CHUNK_DIMENSION; y++) {
+		for (uint x = start_x; x < start_x + ADMIN_MAP_CHUNK_DIMENSION; x++) {
+			TileIndex tile = TileXY(x, y);
+			TileType type = GetTileType(tile);
+			Owner owner = OWNER_NONE;
+			/* Get our owner value only if this tile can have an owner. */
+			if (TileCanHaveOwner(tile)) {
+				owner = GetTileOwner(tile);
+			}
+			uint8 tile_value = (uint8)((owner & 0x0f) << 4 | (type & 0x0f));
+			/* Send our tile information as a single byte; the low 4 bits are the tile type, the high 4 bits are the owner. */
+			p->Send_uint8(tile_value);
+		}
+	}
+	this->SendPacket(p);
+
+	return NETWORK_RECV_STATUS_OKAY;
+}
+
+/**
+ * Send a single chunk of heightmap information.
+ * 
+ * @param chunk_id The chunk index for this map.
+ */
+NetworkRecvStatus ServerNetworkAdminSocketHandler::SendHeightMapChunk(uint chunk_id)
+{
+	assert(chunk_id < (MapSize() / ADMIN_MAP_CHUNK_TILES));
+
+	/* Translate our chunk_id to the starting x/y coordinates. */
+	uint start_x = (chunk_id * ADMIN_MAP_CHUNK_DIMENSION) % MapSizeX();
+	uint start_y = ((chunk_id * ADMIN_MAP_CHUNK_DIMENSION) / MapSizeX()) * ADMIN_MAP_CHUNK_DIMENSION;
+
+	Packet* p = new Packet(ADMIN_PACKET_SERVER_HEIGHTMAP_CHUNK);
+	/* Send our chunk ID first. */
+	p->Send_uint32(chunk_id);
+	/* We send the chunk size so we can change this value without breaking protocol. */
+	p->Send_uint32(ADMIN_MAP_CHUNK_DIMENSION);
+
+	for (uint y = start_y; y < start_y + ADMIN_MAP_CHUNK_DIMENSION; y++) {
+		for (uint x = start_x; x < start_x + ADMIN_MAP_CHUNK_DIMENSION; x++) {
+			p->Send_uint8((uint8)(TileHeight(TileXY(x, y)) & 0xff));
+		}
+	}
+	this->SendPacket(p);
+
+	return NETWORK_RECV_STATUS_OKAY;
+}
+
+/**
+ * Send all map chunks.
+ * This will send two packets per chunk, one for type/ownership information, and one for heightmap info.
+ * 
+ * @see ServerNetworkAdminSocketHandler::SendMapInfoChunk
+ * @see ServerNetworkAdminSocketHandler::SendHeightMapChunk
+ */
+NetworkRecvStatus ServerNetworkAdminSocketHandler::SendFullMap()
+{
+	uint chunk_count = MapSize() / ADMIN_MAP_CHUNK_TILES;
+	for (uint i = 0; i < chunk_count; i++) {
+		SendMapInfoChunk(i);
+		SendHeightMapChunk(i);
+	}
+	return NETWORK_RECV_STATUS_OKAY;
+}
+
 /***********
  * Receiving functions
  ************/
@@ -766,6 +867,20 @@ NetworkRecvStatus ServerNetworkAdminSocketHandler::Receive_ADMIN_POLL(Packet *p)
 		case ADMIN_UPDATE_CMD_NAMES:
 			/* The admin is requesting the names of DoCommands. */
 			this->SendCmdNames();
+			break;
+
+		case ADMIN_UPDATE_MAP:
+			if (d1 == UINT32_MAX) {
+				this->SendFullMap();
+			} else {
+				/* Ensure that the chunk being requested is within the map dimensions */
+				if (d1 > (MapSize() / ADMIN_MAP_CHUNK_TILES)) {
+					DEBUG(net, 3, "[admin] Request for map chunk %d from '%s' (%s), which is out of bounds.", d1, this->admin_name, this->admin_version);
+					return this->SendError(NETWORK_ERROR_ILLEGAL_PACKET);
+				}
+				this->SendMapInfoChunk(d1);
+				this->SendHeightMapChunk(d1);
+			}
 			break;
 
 		default:

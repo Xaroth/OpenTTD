@@ -68,6 +68,9 @@ public:
 	NetworkRecvStatus SendCmdNames();
 	NetworkRecvStatus SendCmdLogging(ClientID client_id, const CommandPacket *cp);
 	NetworkRecvStatus SendRconEnd(const char *command);
+	NetworkRecvStatus SendHeightMapChunk(uint chunk_id);
+	NetworkRecvStatus SendMapInfoChunk(uint chunk_id);
+	NetworkRecvStatus SendFullMap();
 
 	static void Send();
 	static void AcceptConnection(SOCKET s, const NetworkAddress &address);

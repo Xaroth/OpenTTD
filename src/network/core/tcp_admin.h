@@ -59,6 +59,8 @@ enum PacketAdminType {
 	ADMIN_PACKET_SERVER_GAMESCRIPT,      ///< The server gives the admin information from the GameScript in JSON.
 	ADMIN_PACKET_SERVER_RCON_END,        ///< The server indicates that the remote console command has completed.
 	ADMIN_PACKET_SERVER_PONG,            ///< The server replies to a ping request from the admin.
+	ADMIN_PACKET_SERVER_MAP_INFO_CHUNK,  ///< The server sends a single chunk of map information to the admin.
+	ADMIN_PACKET_SERVER_HEIGHTMAP_CHUNK, ///< The server sends a single chunk of heightmap information to the admin.
 
 	INVALID_ADMIN_PACKET = 0xFF,         ///< An invalid marker for admin packets.
 };
@@ -82,6 +84,7 @@ enum AdminUpdateType {
 	ADMIN_UPDATE_CMD_NAMES,       ///< The admin would like a list of all DoCommand names.
 	ADMIN_UPDATE_CMD_LOGGING,     ///< The admin would like to have DoCommand information.
 	ADMIN_UPDATE_GAMESCRIPT,      ///< The admin would like to have gamescript messages.
+	ADMIN_UPDATE_MAP,             ///< The admin would like to have map updates.
 	ADMIN_UPDATE_END,             ///< Must ALWAYS be on the end of this list!! (period)
 };
 
