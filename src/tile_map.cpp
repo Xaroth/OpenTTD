@@ -11,6 +11,7 @@
 #include "tile_map.h"
 
 #include "safeguards.h"
+#include "debug.h"
 
 /**
  * Get a tile's slope given the heigh of its four corners.
@@ -79,11 +80,11 @@ Slope GetTileSlope(TileIndex tile, int *h)
  * @param h If not \c nullptr, pointer to storage of z height.
  * @return Slope of the tile, except for the HALFTILE part.
  */
-Slope GetTilePixelSlopeOutsideMap(int x, int y, int *h)
+Slope GetTilePixelSlopeOutsideMap(int x, int y, int* h)
 {
-	int hnorth = TileHeightOutsideMap(x,     y);     // N corner.
-	int hwest  = TileHeightOutsideMap(x + 1, y);     // W corner.
-	int heast  = TileHeightOutsideMap(x,     y + 1); // E corner.
+	int hnorth = TileHeightOutsideMap(x, y);     // N corner.
+	int hwest = TileHeightOutsideMap(x + 1, y);     // W corner.
+	int heast = TileHeightOutsideMap(x, y + 1); // E corner.
 	int hsouth = TileHeightOutsideMap(x + 1, y + 1); // S corner.
 
 	Slope s = GetTileSlopeGivenHeight(hnorth, hwest, heast, hsouth, h);
@@ -97,7 +98,7 @@ Slope GetTilePixelSlopeOutsideMap(int x, int y, int *h)
  * @param h If not \c nullptr, pointer to storage of z height (only if tile is flat)
  * @return Whether the tile is flat
  */
-bool IsTileFlat(TileIndex tile, int *h)
+bool IsTileFlat(TileIndex tile, int* h)
 {
 	uint x1 = TileX(tile);
 	uint y1 = TileY(tile);
@@ -130,7 +131,7 @@ int GetTileZ(TileIndex tile)
 		TileHeight(TileXY(x2, y1)), // W corner
 		TileHeight(TileXY(x1, y2)), // E corner
 		TileHeight(TileXY(x2, y2)), // S corner
-	});
+		});
 }
 
 /**
@@ -150,5 +151,58 @@ int GetTileMaxZ(TileIndex t)
 		TileHeight(TileXY(x2, y1)), // W corner
 		TileHeight(TileXY(x1, y2)), // E corner
 		TileHeight(TileXY(x2, y2)), // S corner
-	});
+		});
+}
+
+/**
+ * Update the shadow-map for this TileIndex
+ * And check if the tile has been changed
+ *
+ * 
+ * @param tile Tile to check
+ * @param ignore_trees When set, ignore changes between MP_TREES and either MP_CLEAR or MP_WATER
+ * reduce the amount of change noise generated.
+ * @return Whether or not the the tile has been changed
+ */
+ShadowTileChange UpdateShadowTile(TileIndex tile, bool ignore_trees)
+{
+	/* Invalid tiles are silently ignored. */
+	if (!IsValidTile(tile)) return TILE_CHANGE_NONE;
+
+	TileType current_type = GetTileType(tile);
+	TileType shadow_type = GetShadowTileType(tile);
+
+	ShadowTileChange change = TILE_CHANGE_NONE;
+
+	if (current_type != shadow_type) {
+		if (ignore_trees && (
+			(current_type == MP_TREES && shadow_type == MP_CLEAR) ||
+			(current_type == MP_TREES && shadow_type == MP_WATER) ||
+			(shadow_type == MP_TREES && current_type == MP_CLEAR) ||
+			(shadow_type == MP_TREES && current_type == MP_WATER)
+			)) {
+			/* We ignore changes between MP_TREES and MP_CLEAR/MP_WATER to avoid a needless
+			 * amount of updates. */
+			change |= TILE_CHANGE_NONE;
+		} else {
+			DEBUG(map, 1, "[UpdateShadowTile] Tile type changed: %d (%d, was %d)", tile, current_type, shadow_type);
+			change |= TILE_CHANGE_TYPE;
+		}
+	} else if (TileCanHaveOwner(tile) && ShadowTileCanHaveOwner(tile)) {
+		if (GetTileOwner(tile) != GetShadowTileOwner(tile)) {
+			DEBUG(map, 1, "[UpdateShadowTile] Tile owner changed: %d (%d, was %d)", tile, GetTileOwner(tile), GetShadowTileOwner(tile));
+			change |= TILE_CHANGE_OWNER;
+		}
+	}
+	if (TileHeight(tile) != ShadowTileHeight(tile)) {
+		DEBUG(map, 1, "[UpdateShadowTile] Tile height changed: %d (%d, was %d)", tile, TileHeight(tile), ShadowTileHeight(tile));
+		change |= TILE_CHANGE_HEIGHT;
+	}
+
+	/* Directly update our shadow map with data from the tile map */
+	// TODO: Clean up?
+	_sm[tile].type = _m[tile].type;
+	_sm[tile].m1 = _m[tile].m1;
+	_sm[tile].height = _m[tile].height;
+	return change;
 }

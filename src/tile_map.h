@@ -15,6 +15,15 @@
 #include "core/bitmath_func.hpp"
 #include "settings_type.h"
 
+
+enum ShadowTileChange {
+	TILE_CHANGE_NONE = 0x0,
+	TILE_CHANGE_TYPE = 0x1,
+	TILE_CHANGE_OWNER = 0x2,
+	TILE_CHANGE_HEIGHT = 0x4,
+};
+DECLARE_ENUM_AS_BIT_SET(ShadowTileChange);
+
 /**
  * Returns the height of a tile
  *
@@ -30,6 +39,24 @@ static inline uint TileHeight(TileIndex tile)
 {
 	assert(tile < MapSize());
 	return _m[tile].height;
+}
+
+/**
+ * Returns the height of a shadow tile
+ *
+ * This function returns the height of the northern corner of a tile.
+ * This is saved in the global map-array. It does not take affect by
+ * any slope-data of the tile.
+ *
+ * @param tile The tile to get the height from
+ * @return the height of the tile
+ * @pre tile < MapSize()
+ * @see TileHeight(tile)
+ */
+static inline uint ShadowTileHeight(TileIndex tile)
+{
+	assert(tile < MapSize());
+	return _sm[tile].height;
 }
 
 /**
@@ -100,6 +127,20 @@ static inline TileType GetTileType(TileIndex tile)
 }
 
 /**
+ * Get the tiletype of a given tile from the shadow tile map.
+ *
+ * @param tile The tile to get the TileType
+ * @return The tiletype of the tile
+ * @pre tile < MapSize()
+ * @see GetTileType(tile)
+ */
+static inline TileType GetShadowTileType(TileIndex tile)
+{
+	assert(tile < MapSize());
+	return (TileType)GB(_sm[tile].type, 4, 4);
+}
+
+/**
  * Check if a tile is within the map (not a border)
  *
  * @param tile The tile to check
@@ -153,6 +194,21 @@ static inline bool IsTileType(TileIndex tile, TileType type)
 }
 
 /**
+ * Checks if a tile is a given tiletype in the shadow tile map.
+ *
+ * This function checks if a tile has the given tiletype.
+ *
+ * @param tile The tile to check
+ * @param type The type to check against
+ * @return true If the type matches against the type of the tile
+ * @see IsTileType(tile, type)
+ */
+static inline bool IsShadowTileType(TileIndex tile, TileType type)
+{
+	return GetShadowTileType(tile) == type;
+}
+
+/**
  * Checks if a tile is valid
  *
  * @param tile The tile to check
@@ -161,6 +217,67 @@ static inline bool IsTileType(TileIndex tile, TileType type)
 static inline bool IsValidTile(TileIndex tile)
 {
 	return tile < MapSize() && !IsTileType(tile, MP_VOID);
+}
+
+/**
+ * Checks if a shadow tile is valid.
+ *
+ * @param tile The tile to check
+ * @return True if the tile is on the map and not one of MP_VOID.
+ */
+static inline bool IsValidShadowTile(TileIndex tile)
+{
+	return tile < MapSize() && !IsShadowTileType(tile, MP_VOID);
+}
+
+
+/**
+ * Returns if the tile can have an owner
+ *
+ * Tiles which type is one of MP_HOUSE, MP_VOID or MP_INDUSTRY will return false,
+ * as will tiles that are not valid.
+ * 
+ * This acts identical to the assert checks of GetTileOwner.
+ * @return Whether or not this tile can have an owner.
+ */
+static inline bool TileCanHaveOwner(TileIndex tile)
+{
+	return IsValidTile(tile) && !IsTileType(tile, MP_HOUSE) && !IsTileType(tile, MP_INDUSTRY);
+}
+
+/**
+ * Returns if the tile can have an owner
+ *
+ * Tiles which type is one of MP_HOUSE, MP_VOID or MP_INDUSTRY will return false,
+ * as will tiles that are not valid.
+ *
+ * This acts identical to the assert checks of GetTileOwner.
+ * @return Whether or not this tile can have an owner.
+ */
+static inline bool ShadowTileCanHaveOwner(TileIndex tile)
+{
+	return IsValidShadowTile(tile) && !IsShadowTileType(tile, MP_HOUSE) && !IsShadowTileType(tile, MP_INDUSTRY);
+}
+
+/**
+ * Returns the owner of a tile
+ *
+ * This function returns the owner of a tile. This cannot used
+ * for tiles which type is one of MP_HOUSE, MP_VOID and MP_INDUSTRY
+ * as no company owned any of these buildings.
+ *
+ * @param tile The tile to check
+ * @return The owner of the tile
+ * @pre IsValidTile(tile)
+ * @pre The type of the tile must not be MP_HOUSE and MP_INDUSTRY
+ */
+static inline Owner GetShadowTileOwner(TileIndex tile)
+{
+	assert(IsValidShadowTile(tile));
+	assert(!IsShadowTileType(tile, MP_HOUSE));
+	assert(!IsShadowTileType(tile, MP_INDUSTRY));
+
+	return (Owner)GB(_sm[tile].m1, 0, 5);
 }
 
 /**
@@ -270,6 +387,8 @@ int GetTileZ(TileIndex tile);
 int GetTileMaxZ(TileIndex tile);
 
 bool IsTileFlat(TileIndex tile, int *h = nullptr);
+
+ShadowTileChange UpdateShadowTile(TileIndex tile, bool ignore_trees);
 
 /**
  * Return the slope of a given tile

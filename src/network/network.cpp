@@ -750,7 +750,10 @@ bool NetworkServerStart()
 	NetworkUDPAdvertise();
 
 	/* welcome possibly still connected admins - this can only happen on a dedicated server. */
-	if (_network_dedicated) ServerNetworkAdminSocketHandler::WelcomeAll();
+	if (_network_dedicated) {
+		ServerNetworkAdminSocketHandler::WelcomeAll();
+		NetworkAdmin_Start();		
+	}
 
 	return true;
 }
@@ -764,11 +767,7 @@ void NetworkReboot()
 			cs->SendNewGame();
 			cs->SendPackets();
 		}
-
-		for (ServerNetworkAdminSocketHandler *as : ServerNetworkAdminSocketHandler::IterateActive()) {
-			as->SendNewGame();
-			as->SendPackets();
-		}
+		NetworkAdmin_Reboot();
 	}
 
 	/* For non-dedicated servers we have to kick the admins as we are not

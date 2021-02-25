@@ -1911,6 +1911,9 @@ void NetworkServer_Tick(bool send_frame)
 
 	/* See if we need to advertise */
 	NetworkUDPAdvertise();
+
+	/* Process updates for the Admin port */
+	NetworkAdmin_Tick();
 }
 
 /** Yearly "callback". Called whenever the year changes. */

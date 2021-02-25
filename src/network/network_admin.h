@@ -116,4 +116,8 @@ void NetworkAdminConsole(const char *origin, const char *string);
 void NetworkAdminGameScript(const char *json);
 void NetworkAdminCmdLogging(const NetworkClientSocket *owner, const CommandPacket *cp);
 
+void NetworkAdmin_Start();
+void NetworkAdmin_Reboot();
+void NetworkAdmin_Tick();
+
 #endif /* NETWORK_ADMIN_H */

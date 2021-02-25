@@ -34,6 +34,13 @@ extern uint _map_tile_mask;
 extern Tile *_m;
 
 /**
+ * Pointer to the tile-array shadow map.
+ *
+ * This variable points to a copy of the tile-array which contains the tiles of the map.
+ */
+extern Tile *_sm;
+
+/**
  * Pointer to the extended tile-array.
  *
  * This variable points to the extended tile-array which contains the tiles

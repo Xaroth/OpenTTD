@@ -55,6 +55,23 @@ static const uint ADMIN_MAP_CHUNK_DIMENSION = 32;
 static const uint ADMIN_MAP_CHUNK_TILES = ADMIN_MAP_CHUNK_DIMENSION * ADMIN_MAP_CHUNK_DIMENSION;
 static_assert(ADMIN_MAP_CHUNK_TILES < SEND_MTU - 6);
 
+/**
+ * The speed at which we scan the chunks, per tick.
+ * The amount of chunks we scan per tick is calculated by shifting (MapSize() / ADMIN_MAP_CHUNK_TILES) by ADMIN_MAP_SCAN_SPEED.
+ * 
+ * A value of 5 will cause the entire map to be scanned every second (32 ticks), or faster if the map is too small (looking at you, 128x128).
+ * Each value higher will double the time (6 being every 64 ticks, 7 every 128 ticks, etc), lower halves it.
+ *
+ * Tweaking this number will allow to fine-tune between update speed vs processing required every tick.
+  */
+static const uint ADMIN_MAP_SCAN_SPEED = 8; /* Aiming for 256 ticks, or 8 seconds, to scan the entire map. */
+
+/**
+ * The maximum amount of chunks we will scan per tick. This serves mainly as a safeguard, but with a low enough ADMIN_MAP_SCAN_SPEED
+ * value, may reduce the impact on larger maps.
+ */
+static const uint ADMIN_MAP_SCAN_MAX = 16; /* For 4k*4k maps this will mean a full map scan every 30 seconds. */
+
 
 /** Frequencies, which may be registered for a certain update type. */
 static const AdminUpdateFrequency _admin_update_type_frequencies[] = {
@@ -1136,4 +1153,66 @@ void NetworkAdminUpdate(AdminUpdateFrequency freq)
 			}
 		}
 	}
+}
+
+uint _last_chunk_scanned = 0;
+bool _map_initialized = false;
+
+void NetworkAdmin_Start()
+{
+	_map_initialized = false;
+}
+
+void NetworkAdmin_Reboot()
+{
+	for (ServerNetworkAdminSocketHandler* as : ServerNetworkAdminSocketHandler::IterateActive()) {
+		as->SendNewGame();
+		as->SendPackets();
+	}
+	_map_initialized = false;
+}
+
+void NetworkAdmin_Tick()
+{
+	if (!_map_initialized) {
+		/* The first tick we do a full sync of the shadow map so we have a clean base to work off of. */
+		memcpy(_sm, _m, sizeof(Tile) * MapSize());
+		_last_chunk_scanned = 0;
+		_map_initialized = true;
+		return;
+	}
+	/* See the documentation for ADMIN_MAP_SCAN_SPEED and ADMIN_MAP_SCAN_MAX on how to influence the rate
+	 * at which chunks are scanned. */
+	uint chunks_in_map = (MapSize() / ADMIN_MAP_CHUNK_TILES);
+	uint chunks_to_scan = Clamp<uint>(chunks_in_map >> ADMIN_MAP_SCAN_SPEED, 1, ADMIN_MAP_SCAN_MAX);
+	
+	for (uint i = 0; i < chunks_to_scan; i++) {
+		uint chunk_id = (_last_chunk_scanned + i) % chunks_in_map;
+
+		uint start_x = (chunk_id * ADMIN_MAP_CHUNK_DIMENSION) % MapSizeX();
+		uint start_y = ((chunk_id * ADMIN_MAP_CHUNK_DIMENSION) / MapSizeX()) * ADMIN_MAP_CHUNK_DIMENSION;
+
+		ShadowTileChange chunk_changed = TILE_CHANGE_NONE;
+
+		for (uint y = start_y; y < start_y + ADMIN_MAP_CHUNK_DIMENSION; y++) {
+			for (uint x = start_x; x < start_x + ADMIN_MAP_CHUNK_DIMENSION; x++) {
+				chunk_changed |= UpdateShadowTile(TileXY(x, y), true);
+			}
+		}
+
+		if (chunk_changed != TILE_CHANGE_NONE) {
+			DEBUG(net, 1, "NetworkAdmin_Tick: Chunk %d: %d", chunk_id, chunk_changed);
+			for (ServerNetworkAdminSocketHandler* as : ServerNetworkAdminSocketHandler::IterateActive()) {
+				if (as->update_frequency[ADMIN_UPDATE_MAP] & ADMIN_FREQUENCY_AUTOMATIC) {
+					if (chunk_changed & TILE_CHANGE_TYPE || chunk_changed & TILE_CHANGE_OWNER) {
+						as->SendMapInfoChunk(chunk_id);
+					}
+					if (chunk_changed & TILE_CHANGE_HEIGHT) {
+						as->SendHeightMapChunk(chunk_id);
+					}
+				}
+			}
+		}
+	}
+	_last_chunk_scanned = (_last_chunk_scanned + chunks_to_scan) % chunks_in_map;
 }
